@@ -472,7 +472,9 @@ System.register("chunks:///_virtual/app.ts", ['./rollupPluginModLoBabelHelpers.j
               return;
             }
             var s = app.screen;
-            if (s === 'game') app.Pause();else if (s === 'pause') Start(app);else if (s === 'item_detail') CloseDetail(app);else if (s === 'settings' || s === 'cats' || s === 'rank' || s === 'replace_pet') app.Home();
+            if (s === 'game') app.Pause();else if (s === 'pause') Start(app);else if (s === 'item_detail') CloseDetail(app);else if (s === 'language') {
+              if (!app.languageSwitching) app.Settings();
+            } else if (s === 'settings' || s === 'cats' || s === 'rank' || s === 'replace_pet') app.Home();
           },
           ViewSize: function ViewSize() {
             return [360, 640];
@@ -7296,7 +7298,7 @@ System.register("chunks:///_virtual/itemTags.ts", ['cc', './kit.ts', './skin.ts'
 });
 
 System.register("chunks:///_virtual/kit.ts", ['./rollupPluginModLoBabelHelpers.js', 'cc', './text.ts', './assets.ts'], function (exports) {
-  var _createForOfIteratorHelperLoose, _inheritsLoose, _extends, cclegacy, resources, TTFFont, Size, Vec3, UITransform, UIOpacity, Mask, Node, Graphics, Color, Sprite, Label, tween, SpriteFrame, director, Rect, Layers, sys, setMeasure, textWidth, wrap, resolveAsset;
+  var _createForOfIteratorHelperLoose, _inheritsLoose, _extends, cclegacy, resources, TTFFont, sys, Size, Vec3, UITransform, UIOpacity, Mask, Node, Graphics, Color, Sprite, Label, tween, SpriteFrame, director, Rect, Layers, setMeasure, textWidth, wrap, resolveAsset;
   return {
     setters: [function (module) {
       _createForOfIteratorHelperLoose = module.createForOfIteratorHelperLoose;
@@ -7306,6 +7308,7 @@ System.register("chunks:///_virtual/kit.ts", ['./rollupPluginModLoBabelHelpers.j
       cclegacy = module.cclegacy;
       resources = module.resources;
       TTFFont = module.TTFFont;
+      sys = module.sys;
       Size = module.Size;
       Vec3 = module.Vec3;
       UITransform = module.UITransform;
@@ -7321,7 +7324,6 @@ System.register("chunks:///_virtual/kit.ts", ['./rollupPluginModLoBabelHelpers.j
       director = module.director;
       Rect = module.Rect;
       Layers = module.Layers;
-      sys = module.sys;
     }, function (module) {
       setMeasure = module.setMeasure;
       textWidth = module.textWidth;
@@ -7345,29 +7347,59 @@ System.register("chunks:///_virtual/kit.ts", ['./rollupPluginModLoBabelHelpers.j
         sans: 'NotoSansSC-Black',
         body: 'NotoSansSC-Text',
         'boot-sans': 'NotoSansSC-Black',
-        'boot-body': 'NotoSansSC-Text'
+        'boot-body': 'NotoSansSC-Text',
+        names: 'NotoSansSC-Black-names',
+        'names-ko': 'NotoSansKR-Black-names'
       };
+      // The language picker's names (each language in its own script) use the same two small subsets with every font set.
+      var FIXED_FONTS = ['NotoSansSC-Black-names', 'NotoSansKR-Black-names'];
       var fonts = {};
 
       // Loads the two faces of the current font set (cjk, latin or ko, docs/port-plan.md §9) before any page is built.
       // The Korean set is cut from Noto Sans KR (same design as Noto Sans SC, which has no Hangul).
-      function loadFonts(set) {
+      // All or nothing: a language switch whose fonts fail to load leaves the current faces in place.
+      // still(): false when the caller no longer wants this set (a cancelled or superseded language switch).
+      function loadFonts(set, still) {
         // No spread or for-of over Set/Map: Cocos builds in loose mode, where they compile to array operations.
         var names = Object.values(FAMILY_ASSET).filter(function (n, i, all) {
           return all.indexOf(n) === i;
         });
+        var loaded = {};
         return Promise.all(names.map(function (n) {
           return new Promise(function (ok, fail) {
-            var file = set === 'ko' ? n.replace('NotoSansSC', 'NotoSansKR') : n;
-            resources.load("fonts/" + file + "-" + set, TTFFont, function (err, font) {
+            var path = FIXED_FONTS.indexOf(n) >= 0 ? n : (set === 'ko' ? n.replace('NotoSansSC', 'NotoSansKR') : n) + "-" + set;
+            resources.load("fonts/" + path, TTFFont, function (err, font) {
               if (err) fail(err);else {
-                fonts[n] = font;
+                loaded[n] = font;
                 ok();
               }
             });
           });
         })).then(function () {
-          return installMeasure();
+          return warmFaces(names.map(function (n) {
+            return loaded[n];
+          }));
+        }).then(function () {
+          // The swap and the measure reset happen together, synchronously, and only if the switch is still wanted.
+          if (still && !still()) throw new Error('superseded');
+          for (var _iterator = _createForOfIteratorHelperLoose(names), _step; !(_step = _iterator()).done;) {
+            var n = _step.value;
+            fonts[n] = loaded[n];
+          }
+          installMeasure();
+        });
+      }
+      // On the web a registered face is only fetched when text first asks for it; a label drawn before that (the picker's
+      // Korean name, first used long after boot) is rasterised once with a system fallback. Load every face up front.
+      function warmFaces(faces) {
+        if (sys.isNative || typeof document === 'undefined' || !document.fonts || typeof document.fonts.load !== 'function') return Promise.resolve();
+        return Promise.all(faces.map(function (face) {
+          var css = cssFamily(face);
+          return css ? document.fonts.load("20px \"" + css + "\"")["catch"](function () {
+            return [];
+          }) : Promise.resolve([]);
+        })).then(function () {
+          return undefined;
         });
       }
       function fontFor(family) {
@@ -7399,6 +7431,7 @@ System.register("chunks:///_virtual/kit.ts", ['./rollupPluginModLoBabelHelpers.j
         return found;
       }
       function installMeasure() {
+        measureCache.clear(); // a language switch can change the faces behind a family (the Korean set)
         var ctx = typeof document !== 'undefined' ? document.createElement('canvas').getContext('2d') : null;
         setMeasure(function (text, size, family) {
           var key = family + "|" + size + "|" + text;
@@ -7486,8 +7519,8 @@ System.register("chunks:///_virtual/kit.ts", ['./rollupPluginModLoBabelHelpers.j
           delete p.children;
           this.props = p;
           this.apply();
-          for (var _iterator = _createForOfIteratorHelperLoose(kids != null ? kids : []), _step; !(_step = _iterator()).done;) {
-            var c = _step.value;
+          for (var _iterator2 = _createForOfIteratorHelperLoose(kids != null ? kids : []), _step2; !(_step2 = _iterator2()).done;) {
+            var c = _step2.value;
             this.AddChild(c);
           }
         }
@@ -7531,8 +7564,8 @@ System.register("chunks:///_virtual/kit.ts", ['./rollupPluginModLoBabelHelpers.j
         };
         _proto.FindById = function FindById(id) {
           if (this.props.id === id) return this;
-          for (var _iterator2 = _createForOfIteratorHelperLoose(this.children), _step2; !(_step2 = _iterator2()).done;) {
-            var c = _step2.value;
+          for (var _iterator3 = _createForOfIteratorHelperLoose(this.children), _step3; !(_step3 = _iterator3()).done;) {
+            var c = _step3.value;
             var _f = c.FindById(id);
             if (_f) return _f;
           }
@@ -7547,8 +7580,8 @@ System.register("chunks:///_virtual/kit.ts", ['./rollupPluginModLoBabelHelpers.j
         _proto.SetStyle = function SetStyle(style) {
           Object.assign(this.props, style);
           this.apply();
-          for (var _iterator3 = _createForOfIteratorHelperLoose(this.children), _step3; !(_step3 = _iterator3()).done;) {
-            var c = _step3.value;
+          for (var _iterator4 = _createForOfIteratorHelperLoose(this.children), _step4; !(_step4 = _iterator4()).done;) {
+            var c = _step4.value;
             c.layout();
           }
         };
@@ -7909,8 +7942,8 @@ System.register("chunks:///_virtual/kit.ts", ['./rollupPluginModLoBabelHelpers.j
             var allKeys = Object.keys(fa).concat(Object.keys(fb)).filter(function (k, i, all) {
               return all.indexOf(k) === i;
             });
-            for (var _iterator4 = _createForOfIteratorHelperLoose(allKeys), _step4; !(_step4 = _iterator4()).done;) {
-              var _k = _step4.value;
+            for (var _iterator5 = _createForOfIteratorHelperLoose(allKeys), _step5; !(_step5 = _iterator5()).done;) {
+              var _k = _step5.value;
               var va = fa[_k],
                 vb = fb[_k];
               if (typeof va === 'number' && typeof vb === 'number') out[_k] = va + (vb - va) * u;else out[_k] = u < 1 ? va != null ? va : vb : vb != null ? vb : va;
@@ -8031,8 +8064,8 @@ System.register("chunks:///_virtual/kit.ts", ['./rollupPluginModLoBabelHelpers.j
             return;
           }
           frameCache.set(path, frame);
-          for (var _iterator5 = _createForOfIteratorHelperLoose(cbs), _step5; !(_step5 = _iterator5()).done;) {
-            var cb = _step5.value;
+          for (var _iterator6 = _createForOfIteratorHelperLoose(cbs), _step6; !(_step6 = _iterator6()).done;) {
+            var cb = _step6.value;
             cb(frame);
           }
         });
@@ -8095,8 +8128,8 @@ System.register("chunks:///_virtual/kit.ts", ['./rollupPluginModLoBabelHelpers.j
             pointerEvents: 'none'
           });
           _this4.AddChild(_this4.content);
-          for (var _iterator6 = _createForOfIteratorHelperLoose(kids), _step6; !(_step6 = _iterator6()).done;) {
-            var c = _step6.value;
+          for (var _iterator7 = _createForOfIteratorHelperLoose(kids), _step7; !(_step7 = _iterator7()).done;) {
+            var c = _step7.value;
             _this4.content.AddChild(c);
           }
           _this4.track = new W('Panel', {
@@ -8152,8 +8185,8 @@ System.register("chunks:///_virtual/kit.ts", ['./rollupPluginModLoBabelHelpers.j
 
         _proto2.GetContentSize = function GetContentSize() {
           var h = 0;
-          for (var _iterator7 = _createForOfIteratorHelperLoose(this.content.children), _step7; !(_step7 = _iterator7()).done;) {
-            var c = _step7.value;
+          for (var _iterator8 = _createForOfIteratorHelperLoose(this.content.children), _step8; !(_step8 = _iterator8()).done;) {
+            var c = _step8.value;
             var l = c.GetLayout();
             h = Math.max(h, l.y + l.h);
           }
@@ -8262,8 +8295,8 @@ System.register("chunks:///_virtual/kit.ts", ['./rollupPluginModLoBabelHelpers.j
         });
         loadSpriteFrame(path, function (base) {
           if (!root.node.isValid) return;
-          for (var _iterator8 = _createForOfIteratorHelperLoose(strips), _step8; !(_step8 = _iterator8()).done;) {
-            var s = _step8.value;
+          for (var _iterator9 = _createForOfIteratorHelperLoose(strips), _step9; !(_step9 = _iterator9()).done;) {
+            var s = _step9.value;
             var n = new Node('strip');
             n.layer = root.node.layer;
             var _t2 = n.addComponent(UITransform);
@@ -8285,6 +8318,91 @@ System.register("chunks:///_virtual/kit.ts", ['./rollupPluginModLoBabelHelpers.j
           }
         });
         return root;
+      }
+      cclegacy._RF.pop();
+    }
+  };
+});
+
+System.register("chunks:///_virtual/language.ts", ['cc', './i18n.ts', './kit.ts'], function (exports) {
+  var cclegacy, resources, JsonAsset, fontSetFor, setLanguage, loadFonts;
+  return {
+    setters: [function (module) {
+      cclegacy = module.cclegacy;
+      resources = module.resources;
+      JsonAsset = module.JsonAsset;
+    }, function (module) {
+      fontSetFor = module.fontSetFor;
+      setLanguage = module.setLanguage;
+    }, function (module) {
+      loadFonts = module.loadFonts;
+    }],
+    execute: function () {
+      exports({
+        applyLanguage: applyLanguage,
+        cancelLanguageSwitch: cancelLanguageSwitch,
+        languageName: languageName
+      });
+      cclegacy._RF.push({}, "33940UiLDRJnqvgMj42py1+", "language", undefined);
+      var port = null;
+      // Each switch gets a number; a load that finishes after a newer switch (or a cancel) is thrown away, never applied.
+      var generation = 0;
+      function loadJson(path) {
+        return new Promise(function (ok) {
+          return resources.load(path, JsonAsset, function (err, asset) {
+            if (err) console.warn('[Language] missing', path, err.message);
+            ok(err ? null : asset.json);
+          });
+        });
+      }
+
+      // The language's own name ("日本語"), drawn with the fixed 'names' fonts (ui/kit.ts).
+      function languageName(code) {
+        var _port$names$code, _port;
+        return (_port$names$code = (_port = port) == null ? void 0 : _port.names[code]) != null ? _port$names$code : code;
+      }
+
+      // A switch still loading (a stalled request) is dropped: whatever arrives later changes nothing.
+      function cancelLanguageSwitch() {
+        generation++;
+      }
+
+      // Boot is lenient (a missing table shows the source text rather than no game); a switch from the picker is strict:
+      // it rejects without touching the current language unless the table, the port-only copy and the fonts all loaded.
+      function applyLanguage(lang, strict) {
+        if (strict === void 0) {
+          strict = false;
+        }
+        var mine = ++generation;
+        var current = function current() {
+          return mine === generation;
+        };
+        var table = lang === 'zh_CN' ? Promise.resolve(null) : loadJson('i18n/' + lang);
+        var extra = port ? Promise.resolve(port) : loadJson('i18n/port-strings');
+        return Promise.all([table, extra]).then(function (_ref) {
+          var t = _ref[0],
+            p = _ref[1];
+          if (strict && lang !== 'zh_CN' && !t) throw new Error('no table for ' + lang);
+          if (strict && !p) throw new Error('no port strings');
+          if (!current()) throw new Error('superseded');
+          // loadFonts swaps the faces only while this switch is current, in the same synchronous step as what follows.
+          return loadFonts(fontSetFor(lang), current).then(function () {
+            var _ref2;
+            port = (_ref2 = p) != null ? _ref2 : port;
+            var merged = t;
+            if (lang !== 'zh_CN' && port) {
+              var _merged;
+              merged = Object.assign({}, (_merged = merged) != null ? _merged : {});
+              for (var _i = 0, _Object$keys = Object.keys(port.strings); _i < _Object$keys.length; _i++) {
+                var key = _Object$keys[_i];
+                var v = port.strings[key][lang];
+                if (v) merged[key] = v;
+              }
+            }
+            setLanguage(lang, merged);
+            console.log('[Language]', lang);
+          });
+        });
       }
       cclegacy._RF.pop();
     }
@@ -9095,15 +9213,15 @@ System.register("chunks:///_virtual/localStorage.ts", ['cc'], function (exports)
   };
 });
 
-System.register("chunks:///_virtual/main", ['./authority.ts', './board.ts', './buildRules.ts', './config.ts', './i18n.ts', './presentation.ts', './profile.ts', './run.ts', './main.ts', './audio.ts', './dev.ts', './localStorage.ts', './runtime.ts', './types.ts', './adLoading.ts', './ads.ts', './app.ts', './assets.ts', './audio2.ts', './catView.ts', './design.ts', './feedback.ts', './game.ts', './gameState.ts', './itemOverlay.ts', './itemTags.ts', './kit.ts', './cats.ts', './handbook.ts', './home.ts', './loadError.ts', './loading.ts', './pause.ts', './play.ts', './result.ts', './resultDetails.ts', './settings.ts', './paper.ts', './rerollAd.ts', './resultAd.ts', './resultData.ts', './resumeCountdown.ts', './skillItemVfx.ts', './skin.ts', './text.ts', './tips.ts', './vfxState.ts', './widgets.ts'], function () {
+System.register("chunks:///_virtual/main", ['./authority.ts', './board.ts', './buildRules.ts', './config.ts', './i18n.ts', './presentation.ts', './profile.ts', './run.ts', './main.ts', './audio.ts', './dev.ts', './localStorage.ts', './runtime.ts', './types.ts', './adLoading.ts', './ads.ts', './app.ts', './assets.ts', './audio2.ts', './catView.ts', './design.ts', './feedback.ts', './game.ts', './gameState.ts', './itemOverlay.ts', './itemTags.ts', './kit.ts', './language.ts', './cats.ts', './handbook.ts', './home.ts', './loadError.ts', './loading.ts', './pause.ts', './play.ts', './result.ts', './resultDetails.ts', './settings.ts', './paper.ts', './rerollAd.ts', './resultAd.ts', './resultData.ts', './resumeCountdown.ts', './skillItemVfx.ts', './skin.ts', './text.ts', './tips.ts', './vfxState.ts', './widgets.ts'], function () {
   return {
-    setters: [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null],
+    setters: [null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null, null],
     execute: function () {}
   };
 });
 
-System.register("chunks:///_virtual/main.ts", ['./rollupPluginModLoBabelHelpers.js', 'cc', './assets.ts', './kit.ts', './app.ts', './home.ts', './cats.ts', './settings.ts', './handbook.ts', './run.ts', './loading.ts', './game.ts', './ads.ts', './audio2.ts', './runtime.ts', './audio.ts', './i18n.ts', './config.ts'], function () {
-  var _inheritsLoose, _createForOfIteratorHelperLoose, cclegacy, _decorator, director, Director, Canvas, screen, profiler, resources, JsonAsset, game, input, Input, KeyCode, Game, Component, loadCatalog, catalogIds, loadFonts, overflows, applyResolution, createApp, Home, Cats, Settings, Select, Run, Active, Update, Prepare, Start, Finish, Prefetch, ProfileDone, newGame, Init$1, Init, Preload, pick, pickGameLanguage, nativeDebugFixture, pauseAudio, resumeAudio, fontSetFor, setLanguage, misses, tableTexts, DEMO, Upgrade;
+System.register("chunks:///_virtual/main.ts", ['./rollupPluginModLoBabelHelpers.js', 'cc', './assets.ts', './kit.ts', './app.ts', './home.ts', './cats.ts', './settings.ts', './handbook.ts', './run.ts', './loading.ts', './game.ts', './ads.ts', './audio2.ts', './runtime.ts', './audio.ts', './i18n.ts', './language.ts', './config.ts'], function () {
+  var _inheritsLoose, _createForOfIteratorHelperLoose, cclegacy, _decorator, director, Director, Canvas, screen, profiler, game, input, Input, KeyCode, Game, Component, loadCatalog, catalogIds, overflows, applyResolution, createApp, Home, Cats, Settings, Select, Run, Active, Update, Prepare, Start, Finish, Prefetch, ProfileDone, newGame, Init$1, Init, Preload, pick, pickGameLanguage, nativeDebugFixture, pauseAudio, resumeAudio, misses, tableTexts, applyLanguage, cancelLanguageSwitch, DEMO, Upgrade;
   return {
     setters: [function (module) {
       _inheritsLoose = module.inheritsLoose;
@@ -9116,8 +9234,6 @@ System.register("chunks:///_virtual/main.ts", ['./rollupPluginModLoBabelHelpers.
       Canvas = module.Canvas;
       screen = module.screen;
       profiler = module.profiler;
-      resources = module.resources;
-      JsonAsset = module.JsonAsset;
       game = module.game;
       input = module.input;
       Input = module.Input;
@@ -9128,7 +9244,6 @@ System.register("chunks:///_virtual/main.ts", ['./rollupPluginModLoBabelHelpers.
       loadCatalog = module.loadCatalog;
       catalogIds = module.catalogIds;
     }, function (module) {
-      loadFonts = module.loadFonts;
       overflows = module.overflows;
     }, function (module) {
       applyResolution = module.applyResolution;
@@ -9166,10 +9281,11 @@ System.register("chunks:///_virtual/main.ts", ['./rollupPluginModLoBabelHelpers.
       pauseAudio = module.pauseAudio;
       resumeAudio = module.resumeAudio;
     }, function (module) {
-      fontSetFor = module.fontSetFor;
-      setLanguage = module.setLanguage;
       misses = module.misses;
       tableTexts = module.tableTexts;
+    }, function (module) {
+      applyLanguage = module.applyLanguage;
+      cancelLanguageSwitch = module.cancelLanguageSwitch;
     }, function (module) {
       DEMO = module.DEMO;
       Upgrade = module.Upgrade;
@@ -9218,19 +9334,27 @@ System.register("chunks:///_virtual/main.ts", ['./rollupPluginModLoBabelHelpers.
         // The portal is told loading starts once its SDK is up (before init the call has no effect).
         // Language before any copy is built: its table, and the font set that covers it (fontSetFor).
         // The language waits for the SDK: CrazyGames gives the player's locale only after init.
+        // The player's language choice (settings picker) is kept beside the profile, in the same platform storage.
+        var languageStore = function languageStore() {
+          return runtime.storage('catshop-language-');
+        };
         var language = runtime.init().then(function () {
           runtime.loadingStart();
-          var lang = pickGameLanguage(runtime.locale == null ? void 0 : runtime.locale());
-          console.log('[Boot] language', lang);
-          var table = lang === 'zh_CN' ? Promise.resolve(null) : new Promise(function (ok) {
-            return resources.load('i18n/' + lang, JsonAsset, function (err, json) {
-              if (err) console.warn('[Boot] no table for', lang, err.message);
-              ok(err ? null : json.json);
-            });
+          var saved;
+          try {
+            saved = languageStore().read(0).data;
+          } catch (_unused) {
+            saved = undefined;
+          }
+          var lang = pickGameLanguage(runtime.locale == null ? void 0 : runtime.locale(), saved);
+          var auto = pickGameLanguage(runtime.locale == null ? void 0 : runtime.locale(), undefined);
+          console.log('[Boot] language', lang, saved ? '(chosen)' : '');
+          if (lang === auto) return applyLanguage(lang);
+          // A saved choice whose table does not load falls back to the language the game would pick on its own.
+          return applyLanguage(lang, true)["catch"](function (e) {
+            console.warn('[Boot] language', lang, 'failed:', e == null ? void 0 : e.message, '- using', auto);
+            return applyLanguage(auto);
           });
-          return Promise.all([loadFonts(fontSetFor(lang)), table.then(function (t) {
-            return setLanguage(lang, t);
-          })]);
         });
         Promise.all([loadCatalog(), language]).then(function () {
           return Prepare();
@@ -9284,6 +9408,63 @@ System.register("chunks:///_virtual/main.ts", ['./rollupPluginModLoBabelHelpers.
           if (runtime.commercialBreak) app.commercialBreak = function () {
             return runtime.commercialBreak();
           };
+          // Settings: the language picker saves the choice, then switches in place; the privacy row shows only while the
+          // platform says the player's region needs it (AdMob UMP), and opens the platform's consent form.
+          // The switch first (strict: nothing changes unless the table, port-only copy and fonts loaded), then the save, read back so a
+          // storage stub that drops writes (blocked site data) is reported instead of quietly reverting at the next launch.
+          // A stalled download (no engine request timeout on the web) gives up after 15 s: the picker must never hang.
+          app.chooseLanguage = function (code) {
+            var timer;
+            var timeout = new Promise(function (ok, fail) {
+              timer = setTimeout(function () {
+                return fail(new Error('timeout'));
+              }, 15000);
+            });
+            return Promise.race([applyLanguage(code, true), timeout]).then(function () {
+              clearTimeout(timer);
+              // The switch already happened: a storage that throws is a save failure, never a failed switch.
+              try {
+                var store = languageStore();
+                var saved = store.write(0, code);
+                return saved.ok && store.read(0).data === code ? 'ok' : 'unsaved';
+              } catch (e) {
+                console.warn('[Language] save failed', code, e == null ? void 0 : e.message);
+                return 'unsaved';
+              }
+            }, function (e) {
+              clearTimeout(timer);
+              cancelLanguageSwitch();
+              console.warn('[Language] switch failed', code, e == null ? void 0 : e.message);
+              return 'failed';
+            });
+          };
+          if (runtime.privacy) {
+            var privacy = runtime.privacy;
+            // Re-render only on a change, so a status reply never wipes a message on screen (and never loops).
+            var refresh = function refresh(required) {
+              var _props$text, _app$refs$message;
+              if (app.privacyRequired === required) return;
+              app.privacyRequired = required;
+              if (app.screen !== 'settings') return;
+              // A message still showing (a failed switch or save) is carried over to the rebuilt page.
+              var shown = app.toastTime > 0 ? String((_props$text = (_app$refs$message = app.refs.message) == null ? void 0 : _app$refs$message.props.text) != null ? _props$text : '') : '';
+              app.Settings();
+              if (shown) {
+                app.refs.message.SetText(shown);
+                app.refs.message.SetStyle({
+                  opacity: 1
+                });
+              }
+            };
+            privacy.watch == null || privacy.watch(refresh);
+            privacy.required(refresh);
+            app.checkPrivacy = function () {
+              return privacy.required(refresh);
+            };
+            app.showPrivacy = function () {
+              return privacy.show(refresh);
+            };
+          }
           // Host pause (YouTube Playables): stop the run and the engine loop until the host resumes.
           runtime.hostLifecycle == null || runtime.hostLifecycle(function () {
             if (app.screen === 'game') app.Pause();
@@ -14339,7 +14520,7 @@ System.register("chunks:///_virtual/run.ts", ['./rollupPluginModLoBabelHelpers.j
 });
 
 System.register("chunks:///_virtual/runtime.ts", ['./rollupPluginModLoBabelHelpers.js', 'cc', './types.ts', './localStorage.ts', './audio.ts', './dev.ts'], function (exports) {
-  var _asyncToGenerator, _regeneratorRuntime, cclegacy, sys, native, SUPPORTED_LANGUAGES, pickLanguage, mapLocaleTag, keyValueGate, localStorageGate, setHostMuted, fakeAds;
+  var _asyncToGenerator, _regeneratorRuntime, cclegacy, sys, native, SUPPORTED_LANGUAGES, pickLanguage, mapLocaleTag, savedLanguage, keyValueGate, localStorageGate, setHostMuted, fakeAds;
   return {
     setters: [function (module) {
       _asyncToGenerator = module.asyncToGenerator;
@@ -14352,6 +14533,7 @@ System.register("chunks:///_virtual/runtime.ts", ['./rollupPluginModLoBabelHelpe
       SUPPORTED_LANGUAGES = module.SUPPORTED_LANGUAGES;
       pickLanguage = module.pickLanguage;
       mapLocaleTag = module.mapLocaleTag;
+      savedLanguage = module.savedLanguage;
     }, function (module) {
       keyValueGate = module.keyValueGate;
       localStorageGate = module.localStorageGate;
@@ -14372,12 +14554,15 @@ System.register("chunks:///_virtual/runtime.ts", ['./rollupPluginModLoBabelHelpe
       // settings entry only while required() says so).
       // The game language (docs/port-plan.md §9): ?lang=<code> on the web for testing, else the system / browser languages
       // in order, mapped to the supported languages; overseas builds fall back to English, not to the Chinese source.
-      // A portal locale (CrazyGames systemInfo.locale) comes before the browser's.
-      function pickGameLanguage(portalLocale) {
+      // A portal locale (CrazyGames systemInfo.locale) comes before the browser's; the player's own choice in the settings
+      // (saved, 2026-10-30) before both.
+      function pickGameLanguage(portalLocale, saved) {
         var _G$location$search, _G$location, _exec, _nav$languages;
         var query = (_G$location$search = (_G$location = G.location) == null ? void 0 : _G$location.search) != null ? _G$location$search : '';
         var forced = (_exec = /[?&]lang=([A-Za-z_]+)/.exec(query)) == null ? void 0 : _exec[1];
         if (forced && SUPPORTED_LANGUAGES.includes(forced)) return forced;
+        var chosen = savedLanguage(saved);
+        if (chosen) return chosen;
         var nav = globalThis.navigator;
         var browser = sys.isNative ? [sys.languageCode] : (_nav$languages = nav == null ? void 0 : nav.languages) != null ? _nav$languages : nav != null && nav.language ? [nav.language] : [];
         var tags = portalLocale ? [portalLocale].concat(browser) : browser;
@@ -14432,8 +14617,8 @@ System.register("chunks:///_virtual/runtime.ts", ['./rollupPluginModLoBabelHelpe
             }
           },
           // Saves go through the data module (the portal asks games not to rely on local saves).
-          storage: function storage() {
-            return ready ? keyValueGate(sdk().data) : localStorageGate();
+          storage: function storage(prefix) {
+            return ready ? keyValueGate(sdk().data, prefix) : localStorageGate(prefix);
           },
           ads: {
             name: 'crazygames',
@@ -14521,8 +14706,8 @@ System.register("chunks:///_virtual/runtime.ts", ['./rollupPluginModLoBabelHelpe
               }, _callee2, null, [[0, 6]]);
             }))();
           },
-          storage: function storage() {
-            return localStorageGate();
+          storage: function storage(prefix) {
+            return localStorageGate(prefix);
           },
           ads: {
             name: 'poki',
@@ -14647,8 +14832,8 @@ System.register("chunks:///_virtual/runtime.ts", ['./rollupPluginModLoBabelHelpe
           }(function () {
             return locale;
           }),
-          storage: function storage() {
-            return ready ? keyValueGate(cloud) : localStorageGate();
+          storage: function storage(prefix) {
+            return ready ? keyValueGate(cloud, prefix) : localStorageGate(prefix);
           },
           ads: {
             name: 'youtube',
@@ -14690,9 +14875,19 @@ System.register("chunks:///_virtual/runtime.ts", ['./rollupPluginModLoBabelHelpe
         };
       }
       function plainWeb() {
-        var _G$location2;
+        var _G$location2, _G$location3;
         // ?ads=fake: the dev rewarded-ad adapter (always completes), so the ad entries can be shown and driven.
         var fake = ((_G$location2 = G.location) == null ? void 0 : _G$location2.search.includes('ads=fake')) === true;
+        // ?privacy=fake: a region that needs the privacy options (the settings row shows; the "form" closes at once).
+        var fakePrivacy = ((_G$location3 = G.location) == null ? void 0 : _G$location3.search.includes('privacy=fake')) === true ? {
+          required: function required(done) {
+            return done(true);
+          },
+          show: function show(done) {
+            console.log('[Platform] fake privacy form');
+            done(true);
+          }
+        } : undefined;
         return {
           id: fake ? 'dev' : 'web',
           init: function () {
@@ -14710,10 +14905,11 @@ System.register("chunks:///_virtual/runtime.ts", ['./rollupPluginModLoBabelHelpe
             }
             return init;
           }(),
-          storage: function storage() {
-            return localStorageGate();
+          storage: function storage(prefix) {
+            return localStorageGate(prefix);
           },
           ads: fake ? fakeAds() : undefined,
+          privacy: fakePrivacy,
           loadingStart: function loadingStart() {},
           loadingStop: function loadingStop() {},
           gameplay: function gameplay() {}
@@ -14779,6 +14975,9 @@ System.register("chunks:///_virtual/runtime.ts", ['./rollupPluginModLoBabelHelpe
       // Android: the consent status and form from AdMobBridge (channel "privacy", replies "required" | "none").
       function admobPrivacy() {
         var waiting = [];
+        var watcher;
+        // Replies go to the callers waiting for them; a message nobody asked for is the status pushed after the launch's
+        // consent update (AdMobBridge), for the watcher.
         onNative('privacy', function (message) {
           var w = waiting;
           waiting = [];
@@ -14786,6 +14985,7 @@ System.register("chunks:///_virtual/runtime.ts", ['./rollupPluginModLoBabelHelpe
             var _done = _w[_i];
             _done(message === 'required');
           }
+          if (w.length === 0) watcher == null || watcher(message === 'required');
         });
         var ask = function ask(request, done) {
           waiting.push(done);
@@ -14797,6 +14997,9 @@ System.register("chunks:///_virtual/runtime.ts", ['./rollupPluginModLoBabelHelpe
           },
           show: function show(done) {
             return ask('show', done);
+          },
+          watch: function watch(changed) {
+            watcher = changed;
           }
         };
       }
@@ -14826,8 +15029,8 @@ System.register("chunks:///_virtual/runtime.ts", ['./rollupPluginModLoBabelHelpe
             }
             return init;
           }(),
-          storage: function storage() {
-            return localStorageGate();
+          storage: function storage(prefix) {
+            return localStorageGate(prefix);
           },
           ads: android ? admob() : undefined,
           privacy: android ? admobPrivacy() : undefined,
@@ -14841,8 +15044,8 @@ System.register("chunks:///_virtual/runtime.ts", ['./rollupPluginModLoBabelHelpe
   };
 });
 
-System.register("chunks:///_virtual/settings.ts", ['cc', './kit.ts', './skin.ts', './i18n.ts', './audio.ts', './home.ts'], function (exports) {
-  var cclegacy, UI, Image, Face, Text, ink, ImageButton, Row, warmRed, muted, L, playCue, applySettings, base;
+System.register("chunks:///_virtual/settings.ts", ['cc', './kit.ts', './skin.ts', './i18n.ts', './audio.ts', './language.ts', './types.ts', './home.ts', './text.ts'], function (exports) {
+  var cclegacy, UI, Image, Face, Text, ink, FaceText, ImageButton, Row, warmRed, muted, L, language, playCue, applySettings, languageName, PICKER_LANGUAGES, base, textWidth;
   return {
     setters: [function (module) {
       cclegacy = module.cclegacy;
@@ -14853,17 +15056,25 @@ System.register("chunks:///_virtual/settings.ts", ['cc', './kit.ts', './skin.ts'
       Face = module.Face;
       Text = module.Text;
       ink = module.ink;
+      FaceText = module.FaceText;
       ImageButton = module.ImageButton;
       Row = module.Row;
       warmRed = module.warmRed;
       muted = module.muted;
     }, function (module) {
       L = module.L;
+      language = module.language;
     }, function (module) {
       playCue = module.playCue;
       applySettings = module.applySettings;
     }, function (module) {
+      languageName = module.languageName;
+    }, function (module) {
+      PICKER_LANGUAGES = module.PICKER_LANGUAGES;
+    }, function (module) {
       base = module.base;
+    }, function (module) {
+      textWidth = module.textWidth;
     }],
     execute: function () {
       exports('Settings', Settings);
@@ -14881,6 +15092,33 @@ System.register("chunks:///_virtual/settings.ts", ['cc', './kit.ts', './skin.ts'
           Settings(app);
           if (!ok) app.Toast(String(err));
         }
+      }
+
+      // Row pitch below the two R01 rows (music 202, sound 273 / 70 tall, divider at 270).
+      var ROW_PITCH = 71;
+      // Action rows: label from the R01 label column, plank right edge just past the toggles', narrowest plank.
+      var LABEL_X = 50,
+        PLANK_RIGHT = 250,
+        PLANK_MIN = 84;
+      // Picker planks and the check on the current language.
+      var PICK_W = 140,
+        PICK_H = 40,
+        CHECK = 13,
+        PICK_PAD = 5;
+      // A language's name is drawn in its own script with the fixed 'names' fonts (ui/kit.ts), whatever the current set.
+      var nameFamily = function nameFamily(code) {
+        return code === 'ko' ? 'names-ko' : 'names';
+      };
+      function divider(page, y) {
+        for (var i = 0; i < 24; i++) page.AddChild(UI.Panel({
+          position: 'absolute',
+          left: 58 + i * 10.5,
+          top: y,
+          width: 6,
+          height: 1.5,
+          backgroundColor: [196, 160, 118, 200],
+          pointerEvents: 'none'
+        }));
       }
       function Settings(app) {
         var _base = base(app, 'settings', 'home.r02'),
@@ -14919,7 +15157,10 @@ System.register("chunks:///_virtual/settings.ts", ['cc', './kit.ts', './skin.ts'
             pointerEvents: 'none'
           }));
         }
-        page.AddChild(Image('ui.item_overlay.shell.plain', 36, 170, 288, 210, [255, 247, 224, 255]));
+        var extraRows = 1 + (app.privacyRequired ? 1 : 0);
+        var rowsEnd = 343 + extraRows * ROW_PITCH;
+        var cardH = 218 + extraRows * ROW_PITCH;
+        page.AddChild(Image('ui.item_overlay.shell.plain', 36, 170, 288, cardH, [255, 247, 224, 255]));
         page.AddChild(Image('ui.pause.title_plaque', 80, 140, 200, 60));
         var _S$Face = Face('ui.pause.title_plaque', 80, 140, 200, 60),
           tfx = _S$Face[0],
@@ -14928,16 +15169,8 @@ System.register("chunks:///_virtual/settings.ts", ['cc', './kit.ts', './skin.ts'
           tfh = _S$Face[3];
         page.AddChild(Text(L('店铺设置'), 18, tfx, tfy + tfh / 2 - 20, tfw, 40, ink));
         var saving = app.settingsSaving;
-        // Row divider: a programmatic dashed line between the two rows.
-        for (var _i = 0; _i < 24; _i++) page.AddChild(UI.Panel({
-          position: 'absolute',
-          left: 58 + _i * 10.5,
-          top: 270,
-          width: 6,
-          height: 1.5,
-          backgroundColor: [196, 160, 118, 200],
-          pointerEvents: 'none'
-        }));
+        // Row dividers: programmatic dashed lines between the rows.
+        divider(page, 270);
         var rows = [{
           key: 'music',
           label: '音乐',
@@ -14953,7 +15186,7 @@ System.register("chunks:///_virtual/settings.ts", ['cc', './kit.ts', './skin.ts'
         }];
         app.refs.settingsRows = {};
         var _loop = function _loop() {
-          var r = _rows[_i2];
+          var r = _rows[_i];
           var on = app.profile.settings[r.key];
           var busy = saving === r.key;
           var row = UI.Panel({
@@ -14994,10 +15227,77 @@ System.register("chunks:///_virtual/settings.ts", ['cc', './kit.ts', './skin.ts'
             state: state
           };
         };
-        for (var _i2 = 0, _rows = rows; _i2 < _rows.length; _i2++) {
+        for (var _i = 0, _rows = rows; _i < _rows.length; _i++) {
           _loop();
         }
-        var _S$ImageButton = ImageButton('ui.item_overlay.button.secondary', 118, 408, 124, 36, app.Home, {
+        // Language and privacy rows: icon, label, and a small plank button on the right; the whole row is the tap target.
+        var actionRows = [{
+          key: 'language',
+          label: L('语言'),
+          icon: 'ui.icon.language',
+          text: languageName(language()) + ' >',
+          family: nameFamily(language()),
+          onClick: function onClick() {
+            return OpenLanguagePicker(app);
+          }
+        }];
+        if (app.privacyRequired) actionRows.push({
+          key: 'privacy',
+          label: L('隐私选项'),
+          icon: 'ui.icon.privacy',
+          text: L('管理'),
+          family: 'sans',
+          onClick: function onClick() {
+            return app.showPrivacy == null ? void 0 : app.showPrivacy();
+          }
+        });
+        actionRows.forEach(function (r, i) {
+          // Each plank is as wide as its text needs (the face is 83% of the art, minus the text margins); when label
+          // and plank do not both fit, the label gives way down to 88% before the plank does (long privacy labels).
+          var room = PLANK_RIGHT - LABEL_X - 12;
+          var labelW = textWidth(r.label, 14, 'sans');
+          var bw = Math.max(PLANK_MIN, Math.ceil((textWidth(r.text, 13, r.family) + 10) / .834));
+          if (labelW + bw > room) bw = Math.max(PLANK_MIN, Math.min(bw, room - labelW * .88));
+          var y = 273 + 70 + 1 + i * ROW_PITCH,
+            h = 70;
+          divider(page, y - 3);
+          var row = UI.Panel({
+            position: 'absolute',
+            left: 48,
+            top: y,
+            width: 263,
+            height: h,
+            overflow: 'visible'
+          });
+          var cy = h / 2 - 7;
+          row.AddChild(Image(r.icon, 14, cy - 14, 28, 28));
+          row.AddChild(Text(r.label, 14, LABEL_X, cy - 13, room - bw, 26, ink, 'left'));
+          row.AddChild(Image('ui.item_overlay.button.secondary', PLANK_RIGHT - bw, cy - 16, bw, 32));
+          row.AddChild(FaceText('ui.item_overlay.button.secondary', PLANK_RIGHT - bw, cy - 16, bw, 32, r.text, 13, ink, 'center', r.family, 4));
+          var button = UI.Button({
+            position: 'absolute',
+            left: 0,
+            top: 0,
+            width: 263,
+            height: h,
+            borderRadius: 8,
+            disabled: saving !== undefined,
+            onClick: function onClick() {
+              playCue('sfx.click');
+              r.onClick();
+            }
+          });
+          row.AddChild(button);
+          if (saving) row.SetStyle({
+            opacity: .45
+          });
+          page.AddChild(row);
+          app.refs.settingsRows[r.key] = {
+            button: button
+          };
+        });
+        var backY = 416 + extraRows * ROW_PITCH;
+        var _S$ImageButton = ImageButton('ui.item_overlay.button.secondary', 118, backY, 124, 36, app.Home, {
             pressScale: .96,
             hitPad: 4
           }),
@@ -15016,14 +15316,15 @@ System.register("chunks:///_virtual/settings.ts", ['cc', './kit.ts', './skin.ts'
           size: 15
         }], 4));
         page.AddChild(backRoot);
+        app.refs.settingsBack = backRoot;
         // Save failures show inside the booklet's lower margin.
         var message = UI.Label({
           minFontSize: 9,
           position: 'absolute',
           left: 52,
-          top: 346,
+          top: rowsEnd + 1,
           width: 256,
-          height: 28,
+          height: 24,
           text: '',
           fontSize: 12,
           fontColor: warmRed,
@@ -15037,6 +15338,178 @@ System.register("chunks:///_virtual/settings.ts", ['cc', './kit.ts', './skin.ts'
         page.AddChild(message);
         app.refs.message = message;
         app.MountPage(page);
+        // The privacy status can change after boot (Android: the launch's consent update finishing): ask again on every
+        // visit; the answer re-renders the page only when it differs.
+        if (app.screen === 'settings') app.checkPrivacy == null || app.checkPrivacy();
+      }
+
+      // The language picker over the settings page (screen 'language'): the ten languages in two columns, each in its own
+      // script, the current one on the gold primary plank with a check. A choice saves, switches and returns to the
+      // settings page in the new language; the back button, a tap outside the sheet or ESC / Android back close it.
+      function OpenLanguagePicker(app) {
+        Settings(app);
+        app.screen = 'language';
+        // The page's own Back button would show through the dim beside the sheet's.
+        app.refs.settingsBack.SetStyle({
+          visible: false
+        });
+        var close = function close() {
+          if (!app.languageSwitching) Settings(app);
+        };
+        // Taps bubble to ancestors, so the closing backdrop is a sibling under the sheet, not the root: a tap on the
+        // sheet's margins or between the planks lands on the sheet and does nothing (the tall-screen blockers find the
+        // backdrop as the page's full-size tap target and forward to it).
+        var root = UI.Panel({
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          width: 360,
+          height: 640
+        });
+        root.AddChild(UI.Panel({
+          position: 'absolute',
+          left: 0,
+          top: 0,
+          width: 360,
+          height: 640,
+          backgroundColor: [47, 32, 20, 150],
+          onClick: close
+        }));
+        root.AddChild(UI.Panel({
+          position: 'absolute',
+          left: 16,
+          top: 170,
+          width: 328,
+          height: 364,
+          onClick: function onClick() {}
+        }));
+        // The title plaque reaches above the sheet: a tap on it is a tap on the sheet.
+        root.AddChild(UI.Panel({
+          position: 'absolute',
+          left: 80,
+          top: 140,
+          width: 200,
+          height: 30,
+          onClick: function onClick() {}
+        }));
+        root.AddChild(Image('ui.item_overlay.shell.plain', 16, 170, 328, 364, [255, 247, 224, 255]));
+        root.AddChild(Image('ui.pause.title_plaque', 80, 140, 200, 60));
+        var _S$Face3 = Face('ui.pause.title_plaque', 80, 140, 200, 60),
+          tfx = _S$Face3[0],
+          tfy = _S$Face3[1],
+          tfw = _S$Face3[2],
+          tfh = _S$Face3[3];
+        root.AddChild(Text(L('语言'), 18, tfx, tfy + tfh / 2 - 20, tfw, 40, ink));
+        // "Language" under the plaque, so a player who cannot read the current language still finds the way back.
+        if (language() !== 'en') root.AddChild(Text('Language', 14, 16, 203, 328, 20, [86, 56, 32, 255], 'center', 'names'));
+        var current = language();
+        var buttons = {};
+        var roots = [];
+        var _S$Face4 = Face('ui.item_overlay.button.secondary', 0, 0, PICK_W, PICK_H, 4),
+          faceW = _S$Face4[2],
+          faceH = _S$Face4[3];
+        var need = function need(code, size) {
+          return textWidth(languageName(code), size, nameFamily(code)) + (code === current ? CHECK + 3 : 0);
+        };
+        var widest = Math.max.apply(Math, PICKER_LANGUAGES.map(function (code) {
+          return need(code, 13);
+        }));
+        var nameSize = Math.max(10, Math.min(13, 13 * (faceW - 2 * PICK_PAD) / widest));
+        PICKER_LANGUAGES.forEach(function (code, i) {
+          var x = 34 + i % 2 * 152,
+            y = 230 + Math.floor(i / 2) * 50;
+          var on = code === current;
+          var art = on ? 'ui.item_overlay.button.primary' : 'ui.item_overlay.button.secondary';
+          var _S$ImageButton2 = ImageButton(art, x, y, PICK_W, PICK_H, function () {
+              var _app$chooseLanguage;
+              if (app.languageSwitching) return;
+              playCue('sfx.click');
+              if (on) {
+                Settings(app);
+                return;
+              }
+              // Busy: the chosen plank stays, the others and Back dim (as the toggle rows do while saving).
+              app.languageSwitching = true;
+              for (var _i2 = 0, _roots = roots; _i2 < _roots.length; _i2++) {
+                var other = _roots[_i2];
+                if (other !== btnRoot) other.SetStyle({
+                  opacity: .45
+                });
+              }
+              var done = function done(result) {
+                app.languageSwitching = false;
+                if (app.screen !== 'language') return;
+                Settings(app);
+                if (result === 'unsaved') app.Toast('无法保存语言设置');
+                if (result === 'failed') app.Toast('无法切换语言，请稍后再试');
+              };
+              // chooseLanguage resolves 'failed' itself; the second handler only guards against a bug there.
+              void ((_app$chooseLanguage = app.chooseLanguage == null ? void 0 : app.chooseLanguage(code)) != null ? _app$chooseLanguage : Promise.resolve('failed')).then(done, function () {
+                return done('failed');
+              });
+            }, {
+              pressScale: .96,
+              hitPad: 2
+            }),
+            btnRoot = _S$ImageButton2[0],
+            btn = _S$ImageButton2[1],
+            face = _S$ImageButton2[2];
+          var _S$Face5 = Face('ui.item_overlay.button.secondary', 0, 0, PICK_W, PICK_H, 4),
+            fx = _S$Face5[0],
+            fy = _S$Face5[1];
+          var name = {
+            text: languageName(code),
+            size: nameSize,
+            family: nameFamily(code)
+          };
+          face.AddChild(Row(fx, fy, faceW, faceH, on ? [{
+            icon: 'ui.icon.check',
+            size: CHECK
+          }, name] : [name], 3));
+          root.AddChild(btnRoot);
+          buttons[code] = btn;
+          roots.push(btnRoot);
+        });
+        var _S$ImageButton3 = ImageButton('ui.item_overlay.button.secondary', 118, 484, 124, 36, close, {
+            pressScale: .96,
+            hitPad: 4
+          }),
+          backRoot = _S$ImageButton3[0],
+          backBtn = _S$ImageButton3[1],
+          backFace = _S$ImageButton3[2];
+        var _S$Face6 = Face('ui.item_overlay.button.secondary', 0, 0, 124, 36, 8),
+          fx = _S$Face6[0],
+          fy = _S$Face6[1],
+          fw = _S$Face6[2],
+          fh = _S$Face6[3];
+        backFace.AddChild(Row(fx, fy, fw, fh, [{
+          icon: 'ui.icon.back.r02',
+          size: 16
+        }, {
+          text: L('返回'),
+          size: 15
+        }], 4));
+        root.AddChild(backRoot);
+        roots.push(backRoot);
+        app.page.AddChild(root);
+        root.Animate({
+          keyframes: {
+            0: {
+              opacity: 0
+            },
+            1: {
+              opacity: 1
+            }
+          },
+          duration: .18,
+          fillMode: 'both',
+          easing: 'easeOut'
+        });
+        app.refs.languagePicker = {
+          root: root,
+          buttons: buttons,
+          back: backBtn
+        };
       }
       cclegacy._RF.pop();
     }
@@ -16778,7 +17251,8 @@ System.register("chunks:///_virtual/types.ts", ['./rollupPluginModLoBabelHelpers
     execute: function () {
       exports({
         mapLocaleTag: mapLocaleTag,
-        pickLanguage: pickLanguage
+        pickLanguage: pickLanguage,
+        savedLanguage: savedLanguage
       });
       cclegacy._RF.push({}, "c40d2Jv1ahErqrcZ+sae3w6", "types", undefined); // The six platform interfaces (Maker repo docs/port-plan.md §8.3). Platform differences live only behind these; core/
       // and ui/ never branch on the platform (tests/boundary.test.ts). Each mirrors a Maker gate so the existing contracts
@@ -16792,6 +17266,9 @@ System.register("chunks:///_virtual/types.ts", ['./rollupPluginModLoBabelHelpers
       // es/pt/de/fr/ru/ko are port-only tables (i18n/ in this repo; the Maker build ships Chinese only).
       var SUPPORTED_LANGUAGES = exports('SUPPORTED_LANGUAGES', ['zh_CN', 'zh_TW', 'ja', 'en', 'es', 'pt', 'de', 'fr', 'ru', 'ko']);
 
+      // The settings picker's order (approved concept 2026-10-30): both Chinese scripts, then English and Japanese first.
+      var PICKER_LANGUAGES = exports('PICKER_LANGUAGES', ['zh_CN', 'zh_TW', 'en', 'ja', 'ko', 'es', 'pt', 'de', 'fr', 'ru']);
+
       // Overseas builds fall back to English, not the simplified-Chinese source (docs/port-plan.md §9).
       function pickLanguage(preferred, fallback) {
         if (fallback === void 0) {
@@ -16802,6 +17279,11 @@ System.register("chunks:///_virtual/types.ts", ['./rollupPluginModLoBabelHelpers
           if (SUPPORTED_LANGUAGES.includes(p)) return p;
         }
         return fallback;
+      }
+
+      // The player's saved choice from the settings picker, if it is still a supported language.
+      function savedLanguage(saved) {
+        return typeof saved === 'string' && SUPPORTED_LANGUAGES.includes(saved) ? saved : undefined;
       }
 
       // Maps BCP 47 tags (navigator.language, Android/iOS locale) to the game's codes.
